@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+python-multipart
+pandas
+openpyxl
+aioftp
+google-cloud-firestore
+google-auth
