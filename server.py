@@ -51,13 +51,28 @@ class DeleteClassRequest(BaseModel):
 
 # Helper Functions
 def get_ftp_connection():
-    """Create and return FTP connection"""
+    """Create and return FTP connection with better error handling"""
     try:
-        ftp = ftplib.FTP(FTP_HOST)
+        print(f"[DEBUG] Attempting FTP connection to {FTP_HOST}")
+        ftp = ftplib.FTP(FTP_HOST, timeout=30)
+        print(f"[DEBUG] FTP object created, attempting login...")
         ftp.login(FTP_USER, FTP_PASS)
+        print(f"[DEBUG] FTP login successful")
         return ftp
-    except ftplib.all_errors as e:
-        raise HTTPException(status_code=500, detail=f"FTP connection failed: {str(e)}")
+    except ftplib.error_perm as e:
+        error_msg = f"FTP Login Failed - Invalid credentials: {str(e)}"
+        print(f"[ERROR] {error_msg}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"{error_msg}. Check FTP_USER and FTP_PASS environment variables."
+        )
+    except Exception as e:
+        error_msg = f"FTP Connection Failed: {str(e)}"
+        print(f"[ERROR] {error_msg}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"{error_msg}. Check FTP_HOST environment variable and network connectivity."
+        )
 
 def normalize_class_name(class_name: str) -> str:
     """Normalize class name to lowercase and remove .json extension"""
@@ -84,10 +99,29 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
+    """Health check endpoint with configuration status"""
     return {
         "status": "healthy",
-        "ftp_configured": bool(FTP_USER and FTP_PASS)
+        "ftp_configured": bool(FTP_USER and FTP_PASS),
+        "ftp_host": FTP_HOST if FTP_HOST else "NOT_SET",
+        "ftp_user": FTP_USER if FTP_USER else "NOT_SET",
+        "ftp_pass_set": "YES" if FTP_PASS else "NO",
+        "base_path": BASE_PATH if BASE_PATH else "NOT_SET"
+    }
+
+@app.get("/debug/config")
+async def debug_config():
+    """Debug endpoint to check environment variables (DO NOT USE IN PRODUCTION)"""
+    return {
+        "ftp_host": FTP_HOST or "NOT_SET",
+        "ftp_user": FTP_USER or "NOT_SET",
+        "ftp_pass_length": len(FTP_PASS) if FTP_PASS else 0,
+        "ftp_pass_set": bool(FTP_PASS),
+        "base_path": BASE_PATH or "NOT_SET",
+        "all_env_vars": {
+            key: value for key, value in os.environ.items() 
+            if key.startswith('FTP_') or key in ['BASE_PATH', 'PORT']
+        }
     }
 
 @app.get("/classes")
@@ -95,11 +129,55 @@ async def get_all_classes():
     """Get list of all class files from FTP server"""
     ftp = None
     try:
-        ftp = get_ftp_connection()
-        ftp.cwd(BASE_PATH)
+        # Log FTP configuration (without password)
+        print(f"[DEBUG] Connecting to FTP: {FTP_HOST}")
+        print(f"[DEBUG] FTP User: {FTP_USER}")
+        print(f"[DEBUG] Base Path: {BASE_PATH}")
         
-        # List all files
-        files = ftp.nlst()
+        # Check if FTP credentials are configured
+        if not FTP_USER or not FTP_PASS:
+            raise HTTPException(
+                status_code=500,
+                detail="FTP credentials not configured. Please set FTP_USER and FTP_PASS environment variables."
+            )
+        
+        ftp = get_ftp_connection()
+        print(f"[DEBUG] FTP connected successfully")
+        
+        # Try to change to BASE_PATH directory
+        try:
+            ftp.cwd(BASE_PATH)
+            print(f"[DEBUG] Changed to directory: {BASE_PATH}")
+        except ftplib.error_perm as e:
+            print(f"[DEBUG] Directory {BASE_PATH} not found, creating it...")
+            # Try to create the directory
+            try:
+                # Split path and create each part
+                parts = BASE_PATH.strip('/').split('/')
+                current_path = ''
+                for part in parts:
+                    current_path += f'/{part}'
+                    try:
+                        ftp.mkd(current_path)
+                        print(f"[DEBUG] Created directory: {current_path}")
+                    except:
+                        pass  # Directory might already exist
+                ftp.cwd(BASE_PATH)
+            except Exception as create_error:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Cannot access or create directory {BASE_PATH}. Error: {str(create_error)}"
+                )
+        
+        # List all files in the directory
+        files = []
+        try:
+            files = ftp.nlst()
+            print(f"[DEBUG] Found {len(files)} files in directory")
+        except ftplib.error_perm:
+            # Directory is empty
+            print(f"[DEBUG] Directory is empty")
+            files = []
         
         # Filter JSON files and remove extension
         classes = []
@@ -107,24 +185,51 @@ async def get_all_classes():
             if file.endswith('.json'):
                 class_name = file[:-5].lower()
                 classes.append(class_name)
+                print(f"[DEBUG] Found class: {class_name}")
         
         # Sort alphabetically
         classes.sort()
         
+        print(f"[DEBUG] Returning {len(classes)} classes")
+        
         return {
             "status": "success",
             "classes": classes,
-            "total": len(classes)
+            "total": len(classes),
+            "ftp_host": FTP_HOST,
+            "base_path": BASE_PATH
         }
         
+    except HTTPException:
+        raise
     except ftplib.error_perm as e:
-        raise HTTPException(status_code=404, detail="Classes directory not found")
+        error_msg = f"FTP Permission Error: {str(e)}"
+        print(f"[ERROR] {error_msg}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"{error_msg}. Check FTP credentials and permissions."
+        )
+    except ftplib.all_errors as e:
+        error_msg = f"FTP Error: {str(e)}"
+        print(f"[ERROR] {error_msg}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"{error_msg}. Check FTP_HOST, FTP_USER, FTP_PASS in environment variables."
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to list classes: {str(e)}")
+        error_msg = f"Unexpected error: {str(e)}"
+        print(f"[ERROR] {error_msg}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=error_msg
+        )
     finally:
         if ftp:
             try:
                 ftp.quit()
+                print(f"[DEBUG] FTP connection closed")
             except:
                 pass
 
