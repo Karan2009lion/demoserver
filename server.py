@@ -85,6 +85,29 @@ def create_empty_class_file(section: Optional[str] = None) -> dict:
     """Create empty class JSON structure"""
     return {}
 
+
+async def ftp_read(path):
+    async with aioftp.Client.context(FTP_HOST, user=FTP_USER, password=FTP_PASS) as client:
+        if await client.exists(path):
+            async with client.download_stream(path) as stream:
+                content = await stream.read()
+                return json.loads(content.decode())
+        return {}
+
+async def ftp_write(path, data):
+    async with aioftp.Client.context(FTP_HOST, user=FTP_USER, password=FTP_PASS) as client:
+        binary_data = json.dumps(data, indent=2).encode()
+        async with client.upload_stream(path) as stream:
+            await stream.write(binary_data)
+
+async def ftp_ensure_dir(dir_path: str):
+    async with aioftp.Client.context(FTP_HOST, user=FTP_USER, password=FTP_PASS) as client:
+        try:
+            await client.make_directory(dir_path, parents=True)
+        except aioftp.StatusCodeError:
+            pass  # Directory already exists
+
+
 # ========== API ENDPOINTS ==========
 
 @app.get("/")
