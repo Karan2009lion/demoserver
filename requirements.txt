@@ -7,6 +7,7 @@ uvicorn[standard]==0.24.0
 
 # Data Validation (comes with FastAPI but explicit)
 pydantic==2.5.0
+import aioftp ==0.27.2
 
 # Note: python-dotenv NOT needed for Railway
 # Railway provides environment variables directly
