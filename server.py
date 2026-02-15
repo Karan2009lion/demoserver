@@ -83,7 +83,7 @@ def normalize_class_name(class_name: str) -> str:
 
 def create_empty_class_file(section: Optional[str] = None) -> dict:
     """Create empty class JSON structure"""
-    return {"students": {}}
+    return {}
 
 # ========== API ENDPOINTS ==========
 
