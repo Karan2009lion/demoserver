@@ -6,7 +6,7 @@ Main FastAPI application with class management
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import os
-
+import aioftp
 # NO dotenv needed - Railway provides env vars directly
 
 # Create FastAPI app
