@@ -1,21 +1,49 @@
-from fastapi import APIRouter, HTTPException
+"""
+Inaya Backend Server - Railway Deployment
+Main FastAPI application with class management
+"""
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
+import os
+
+# Load environment variables
+load_dotenv()
+
+# Create FastAPI app
+app = FastAPI(
+    title="Inaya Backend API",
+    description="School Management System Backend - Developed by Vertex",
+    version="1.2.0",
+    docs_url="/docs",
+    redoc_url="/redoc"
+)
+
+# Configure CORS - Allow all origins for mobile app
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins for mobile app
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ========== CLASS MANAGEMENT ROUTES ==========
+
 from pydantic import BaseModel
 from typing import Optional
 import ftplib
 import json
-import os
+from fastapi import HTTPException
 
-# ========== ROUTER SETUP ==========
-router = APIRouter(prefix="/classes", tags=["Class Management"])
-
-# ========== FTP CONFIGURATION ==========
-# These should be loaded from environment variables or config
+# FTP Configuration from environment variables
 FTP_HOST = os.getenv("FTP_HOST", "ftp.ftpupload.net")
-FTP_USER = os.getenv("FTP_USER", "your_username")
-FTP_PASS = os.getenv("FTP_PASS", "your_password")
-BASE_PATH = os.getenv("BASE_PATH", "/htdocs/classes")  # Path where class files are stored
+FTP_USER = os.getenv("FTP_USER", "")
+FTP_PASS = os.getenv("FTP_PASS", "")
+BASE_PATH = os.getenv("BASE_PATH", "/htdocs/classes")
 
-# ========== REQUEST MODELS ==========
+# Request Models
 class CreateClassRequest(BaseModel):
     class_name: str
     section: Optional[str] = None
@@ -23,12 +51,9 @@ class CreateClassRequest(BaseModel):
 class DeleteClassRequest(BaseModel):
     class_name: str
 
-# ========== HELPER FUNCTIONS ==========
-
+# Helper Functions
 def get_ftp_connection():
-    """
-    Create and return FTP connection
-    """
+    """Create and return FTP connection"""
     try:
         ftp = ftplib.FTP(FTP_HOST)
         ftp.login(FTP_USER, FTP_PASS)
@@ -37,50 +62,51 @@ def get_ftp_connection():
         raise HTTPException(status_code=500, detail=f"FTP connection failed: {str(e)}")
 
 def normalize_class_name(class_name: str) -> str:
-    """
-    Normalize class name to lowercase and remove .json extension if present
-    """
+    """Normalize class name to lowercase and remove .json extension"""
     name = class_name.strip().lower()
     if name.endswith('.json'):
         name = name[:-5]
     return name
 
-def get_file_path(class_name: str) -> str:
-    """
-    Get full FTP path for class file
-    """
-    normalized_name = normalize_class_name(class_name)
-    return f"{BASE_PATH}/{normalized_name}.json"
-
 def create_empty_class_file(section: Optional[str] = None) -> dict:
-    """
-    Create empty class JSON structure
-    """
-    return {
-        "students": {}
-    }
+    """Create empty class JSON structure"""
+    return {"students": {}}
 
 # ========== API ENDPOINTS ==========
 
-@router.get("")
+@app.get("/")
+async def root():
+    """Root endpoint - API status"""
+    return {
+        "message": "Inaya Backend API",
+        "version": "1.2.0",
+        "status": "running",
+        "developer": "Vertex"
+    }
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {
+        "status": "healthy",
+        "ftp_configured": bool(FTP_USER and FTP_PASS)
+    }
+
+@app.get("/classes")
 async def get_all_classes():
-    """
-    Get list of all class files from FTP server
-    Returns class names without .json extension, in lowercase
-    """
+    """Get list of all class files from FTP server"""
     ftp = None
     try:
         ftp = get_ftp_connection()
         ftp.cwd(BASE_PATH)
         
-        # List all files in the directory
+        # List all files
         files = ftp.nlst()
         
         # Filter JSON files and remove extension
         classes = []
         for file in files:
             if file.endswith('.json'):
-                # Remove .json extension and convert to lowercase
                 class_name = file[:-5].lower()
                 classes.append(class_name)
         
@@ -104,17 +130,16 @@ async def get_all_classes():
             except:
                 pass
 
-@router.post("/create")
+@app.post("/classes/create")
 async def create_class(request: CreateClassRequest):
-    """
-    Create new class JSON file on FTP server
-    Class name will be converted to lowercase
-    """
+    """Create new class JSON file on FTP server"""
     ftp = None
     try:
         # Normalize class name to lowercase
         normalized_name = normalize_class_name(request.class_name)
-        file_path = get_file_path(normalized_name)
+        
+        if not normalized_name:
+            raise HTTPException(status_code=400, detail="Class name cannot be empty")
         
         # Connect to FTP
         ftp = get_ftp_connection()
@@ -150,7 +175,7 @@ async def create_class(request: CreateClassRequest):
             "message": f"Class '{normalized_name}' created successfully",
             "class_name": normalized_name,
             "file_name": f"{normalized_name}.json",
-            "file_path": file_path
+            "file_path": f"{BASE_PATH}/{normalized_name}.json"
         }
         
     except HTTPException:
@@ -164,14 +189,12 @@ async def create_class(request: CreateClassRequest):
             except:
                 pass
 
-@router.delete("/delete")
+@app.delete("/classes/delete")
 async def delete_class(request: DeleteClassRequest):
-    """
-    Delete class JSON file from FTP server
-    """
+    """Delete class JSON file from FTP server"""
     ftp = None
     try:
-        # Normalize class name to lowercase
+        # Normalize class name
         normalized_name = normalize_class_name(request.class_name)
         
         # Connect to FTP
@@ -197,8 +220,8 @@ async def delete_class(request: DeleteClassRequest):
         
     except HTTPException:
         raise
-    except ftplib.error_perm as e:
-        raise HTTPException(status_code=404, detail=f"Class not found or permission denied")
+    except ftplib.error_perm:
+        raise HTTPException(status_code=404, detail="Class not found or permission denied")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete class: {str(e)}")
     finally:
@@ -208,11 +231,9 @@ async def delete_class(request: DeleteClassRequest):
             except:
                 pass
 
-@router.get("/{class_name}/exists")
+@app.get("/classes/{class_name}/exists")
 async def check_class_exists(class_name: str):
-    """
-    Check if a class file exists
-    """
+    """Check if a class file exists"""
     ftp = None
     try:
         normalized_name = normalize_class_name(class_name)
@@ -241,3 +262,80 @@ async def check_class_exists(class_name: str):
                 ftp.quit()
             except:
                 pass
+
+# ========== STUDENT MANAGEMENT ROUTES ==========
+
+@app.get("/students/{class_name}")
+async def get_students(class_name: str):
+    """Get students for a specific class from FTP"""
+    ftp = None
+    try:
+        normalized_name = normalize_class_name(class_name)
+        
+        # Connect to FTP
+        ftp = get_ftp_connection()
+        ftp.cwd(BASE_PATH)
+        
+        # Download the JSON file
+        from io import BytesIO
+        file_buffer = BytesIO()
+        ftp.retrbinary(f"RETR {normalized_name}.json", file_buffer.write)
+        
+        # Parse JSON
+        file_buffer.seek(0)
+        data = json.loads(file_buffer.read().decode('utf-8'))
+        
+        return data
+        
+    except ftplib.error_perm:
+        raise HTTPException(status_code=404, detail=f"Class '{class_name}' not found")
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="Invalid JSON in class file")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get students: {str(e)}")
+    finally:
+        if ftp:
+            try:
+                ftp.quit()
+            except:
+                pass
+
+# ========== ERROR HANDLERS ==========
+
+@app.exception_handler(404)
+async def not_found_handler(request, exc):
+    return {
+        "status": "error",
+        "message": "Resource not found",
+        "detail": str(exc)
+    }
+
+@app.exception_handler(500)
+async def server_error_handler(request, exc):
+    return {
+        "status": "error",
+        "message": "Internal server error",
+        "detail": str(exc)
+    }
+
+# ========== STARTUP/SHUTDOWN EVENTS ==========
+
+@app.on_event("startup")
+async def startup_event():
+    """Run on application startup"""
+    print("=" * 50)
+    print("Inaya Backend API - Starting")
+    print(f"FTP Host: {FTP_HOST}")
+    print(f"Base Path: {BASE_PATH}")
+    print("=" * 50)
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Run on application shutdown"""
+    print("Inaya Backend API - Shutting down")
+
+# This is required for Railway deployment
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
