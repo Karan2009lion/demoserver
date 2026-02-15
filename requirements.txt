@@ -1,10 +1,13 @@
-fastapi
-uvicorn
-python-multipart
-pydantic
-pandas
-httpx
-openpyxl
-aioftp
-google-cloud-firestore
-google-auth
+# Inaya Backend - Python Dependencies (Railway Optimized)
+# Install with: pip install -r requirements.txt
+
+# FastAPI Framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+
+# Data Validation (comes with FastAPI but explicit)
+pydantic==2.5.0
+
+# Note: python-dotenv NOT needed for Railway
+# Railway provides environment variables directly
+# ftplib is part of Python standard library
