@@ -334,6 +334,37 @@ async def delete_class(request: DeleteClassRequest):
             except:
                 pass
 
+@app.get("/students/{class_name}")
+async def get_students(class_name: str):
+    try:
+        file_path = f"{BASE_PATH}/{class_name}.json"
+        students_db = await ftp_read(file_path)
+
+        if not students_db:
+            return {
+                "status": "error",
+                "message": f"No students found for class {class_name}",
+                "students": {}
+            }
+
+        # ✅ SUPPORTED BY BOTH APPS
+        return {
+            "status": "success",          # App-B requirement
+            "class": class_name,
+            "total_students": len(students_db),
+            "students": students_db       # App-A & App-B requirement
+        }
+
+    except Exception as e:
+        print("FETCH STUDENTS ERROR:", str(e))
+        return {
+            "status": "error",
+            "message": str(e),
+            "students": {}
+        }
+
+
+
 @app.get("/classes/{class_name}/exists")
 async def check_class_exists(class_name: str):
     """Check if a class file exists"""
