@@ -457,6 +457,197 @@ async def get_students(class_name: str):
             except:
                 pass
 
+
+# ========== FEE MANAGEMENT ROUTES ==========
+
+class SetFeeRequest(BaseModel):
+    class_name: str
+    tuition_fees: int = 0
+    lab_fees: int = 0
+    miscellaneous_fees: int = 0
+
+class DeleteFeeRequest(BaseModel):
+    class_name: str
+
+@app.get("/fees")
+async def get_all_fees():
+    """Get all class fees from single fees.json file"""
+    ftp = None
+    try:
+        # Connect to FTP
+        ftp = get_ftp_connection()
+        ftp.cwd(BASE_PATH)
+        
+        # Download the fees.json file
+        from io import BytesIO
+        file_buffer = BytesIO()
+        try:
+            ftp.retrbinary("RETR fees.json", file_buffer.write)
+        except ftplib.error_perm:
+            # fees.json doesn't exist, return empty
+            return {
+                "status": "success",
+                "class_fees": {},
+                "total_classes": 0
+            }
+        
+        # Parse JSON
+        file_buffer.seek(0)
+        fee_data = json.loads(file_buffer.read().decode('utf-8'))
+        
+        return {
+            "status": "success",
+            "class_fees": fee_data.get("class_fees", {}),
+            "total_classes": len(fee_data.get("class_fees", {}))
+        }
+        
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="Invalid JSON in fees file")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get fees: {str(e)}")
+    finally:
+        if ftp:
+            try:
+                ftp.quit()
+            except:
+                pass
+
+@app.post("/fees/set")
+async def set_fee_structure(request: SetFeeRequest):
+    """Set or update fee structure for a class in single fees.json file"""
+    ftp = None
+    try:
+        # Normalize class name
+        normalized_name = normalize_class_name(request.class_name)
+        
+        # Calculate total fees
+        total_fees = (
+            request.tuition_fees +
+            request.lab_fees +
+            request.miscellaneous_fees
+        )
+        
+        # Connect to FTP
+        ftp = get_ftp_connection()
+        
+        try:
+            ftp.cwd(BASE_PATH)
+        except ftplib.error_perm:
+            # Directory doesn't exist, create it
+            try:
+                ftp.mkd(BASE_PATH)
+                ftp.cwd(BASE_PATH)
+            except:
+                pass
+        
+        # Download existing fees.json or create new
+        from io import BytesIO
+        all_fees = {"class_fees": {}}
+        
+        try:
+            file_buffer = BytesIO()
+            ftp.retrbinary("RETR fees.json", file_buffer.write)
+            file_buffer.seek(0)
+            all_fees = json.loads(file_buffer.read().decode('utf-8'))
+        except ftplib.error_perm:
+            # fees.json doesn't exist yet
+            pass
+        except json.JSONDecodeError:
+            # Invalid JSON, start fresh
+            pass
+        
+        # Update the specific class fees
+        all_fees["class_fees"][normalized_name] = {
+            "class_name": normalized_name,
+            "tuition_fees": request.tuition_fees,
+            "lab_fees": request.lab_fees,
+            "miscellaneous_fees": request.miscellaneous_fees,
+            "total_fees": total_fees
+        }
+        
+        # Upload updated fees.json
+        json_content = json.dumps(all_fees, indent=2)
+        file_buffer = BytesIO(json_content.encode('utf-8'))
+        ftp.storbinary("STOR fees.json", file_buffer)
+        
+        return {
+            "status": "success",
+            "message": f"Fee structure set for class '{normalized_name}'",
+            "class_name": normalized_name,
+            "total_fees": total_fees
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to set fee structure: {str(e)}")
+    finally:
+        if ftp:
+            try:
+                ftp.quit()
+            except:
+                pass
+
+@app.delete("/fees/delete")
+async def delete_fee_structure(request: DeleteFeeRequest):
+    """Delete fee structure for a class from fees.json"""
+    ftp = None
+    try:
+        # Normalize class name
+        normalized_name = normalize_class_name(request.class_name)
+        
+        # Connect to FTP
+        ftp = get_ftp_connection()
+        ftp.cwd(BASE_PATH)
+        
+        # Download existing fees.json
+        from io import BytesIO
+        file_buffer = BytesIO()
+        try:
+            ftp.retrbinary("RETR fees.json", file_buffer.write)
+        except ftplib.error_perm:
+            raise HTTPException(
+                status_code=404,
+                detail="Fees file not found"
+            )
+        
+        file_buffer.seek(0)
+        all_fees = json.loads(file_buffer.read().decode('utf-8'))
+        
+        # Check if class exists
+        if normalized_name not in all_fees.get("class_fees", {}):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Fee structure not found for class '{normalized_name}'"
+            )
+        
+        # Remove the class
+        del all_fees["class_fees"][normalized_name]
+        
+        # Upload updated fees.json
+        json_content = json.dumps(all_fees, indent=2)
+        file_buffer = BytesIO(json_content.encode('utf-8'))
+        ftp.storbinary("STOR fees.json", file_buffer)
+        
+        return {
+            "status": "success",
+            "message": f"Fee structure deleted for class '{normalized_name}'",
+            "class_name": normalized_name
+        }
+        
+    except HTTPException:
+        raise
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="Invalid JSON in fees file")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete fee structure: {str(e)}")
+    finally:
+        if ftp:
+            try:
+                ftp.quit()
+            except:
+                pass
+
 # ========== ERROR HANDLERS ==========
 
 @app.exception_handler(404)
