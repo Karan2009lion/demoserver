@@ -423,7 +423,7 @@ async def check_class_exists(class_name: str):
 # ========== STUDENT MANAGEMENT ROUTES ==========
 
 @app.get("/students/{class_name}")
-async def get_students(class_name: str):
+async def get_student(class_name: str):
     """Get students for a specific class from FTP"""
     ftp = None
     try:
