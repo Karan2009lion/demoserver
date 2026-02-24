@@ -682,9 +682,9 @@ async def shutdown_event():
     """Run on application shutdown"""
     print("Inaya Backend API - Shutting down")
 
-# ========== STUDENT FEE MANAGEMENT & RECEIPT GENERATION (FIXED VERSION) ==========
+# ========== STUDENT FEE MANAGEMENT & RECEIPT GENERATION (FINAL FIXED VERSION) ==========
 # Add this entire section at the END of your server.py file
-# This version has improved error handling and debugging
+# This version handles missing 'students' key
 
 from datetime import datetime, timedelta
 from reportlab.lib.pagesizes import A4
@@ -727,6 +727,15 @@ class UpdateConcessionRequest(BaseModel):
     class_name: str
     student_id: str
     concession: int
+
+# Helper function to ensure students key exists
+def ensure_students_key(class_data):
+    """Ensure class_data has 'students' key"""
+    if not isinstance(class_data, dict):
+        return {"students": {}}
+    if "students" not in class_data:
+        class_data["students"] = {}
+    return class_data
 
 # Helper function to get total fees for a class
 def get_class_total_fees(class_name):
@@ -776,7 +785,6 @@ def get_next_invoice_number():
             next_num = invoice_data.get("next_invoice_number", 1)
             return next_num
         except:
-            # File doesn't exist, start from 1
             return 1
     except Exception as e:
         print(f"[ERROR] get_next_invoice_number: {str(e)}")
@@ -846,7 +854,7 @@ def generate_receipt_pdf(invoice_number, student_data, amount_paid, note, create
         # Create PDF (half A4 size)
         doc = SimpleDocTemplate(
             pdf_filename,
-            pagesize=(A4[0], A4[1]/2),  # Half A4
+            pagesize=(A4[0], A4[1]/2),
             topMargin=0.5*inch,
             bottomMargin=0.5*inch,
             leftMargin=0.75*inch,
@@ -974,18 +982,15 @@ def cleanup_old_receipts():
         if not os.path.exists(temp_dir):
             return
         
-        # Get all PDF files
         pdf_files = glob.glob(f"{temp_dir}/*.pdf")
-        
-        # Delete files older than 10 days
         cutoff_date = datetime.now() - timedelta(days=10)
         deleted_count = 0
+        
         for pdf_file in pdf_files:
             file_time = datetime.fromtimestamp(os.path.getmtime(pdf_file))
             if file_time < cutoff_date:
                 os.remove(pdf_file)
                 deleted_count += 1
-                print(f"[CLEANUP] Deleted old receipt: {pdf_file}")
         
         if deleted_count > 0:
             print(f"[CLEANUP] Deleted {deleted_count} old receipts")
@@ -1002,11 +1007,9 @@ async def add_student(request: AddStudentRequest):
         print(f"[DEBUG] Adding student: {request.student_id} to class: {request.class_name}")
         normalized_class = normalize_class_name(request.class_name)
         
-        # Get total fees for this class
         total_fees = get_class_total_fees(normalized_class)
         print(f"[DEBUG] Total fees for class {normalized_class}: {total_fees}")
         
-        # Connect to FTP
         ftp = get_ftp_connection()
         ftp.cwd(BASE_PATH)
         
@@ -1017,6 +1020,7 @@ async def add_student(request: AddStudentRequest):
             ftp.retrbinary(f"RETR {normalized_class}.json", file_buffer.write)
             file_buffer.seek(0)
             class_data = json.loads(file_buffer.read().decode('utf-8'))
+            class_data = ensure_students_key(class_data)
             print(f"[DEBUG] Loaded existing class data")
         except Exception as e:
             print(f"[DEBUG] Creating new class file: {str(e)}")
@@ -1083,6 +1087,7 @@ async def update_student(request: UpdateStudentRequest):
         ftp.retrbinary(f"RETR {normalized_class}.json", file_buffer.write)
         file_buffer.seek(0)
         class_data = json.loads(file_buffer.read().decode('utf-8'))
+        class_data = ensure_students_key(class_data)
         
         # Update student
         if request.student_id not in class_data["students"]:
@@ -1135,9 +1140,14 @@ async def collect_student_fee(request: CollectFeeRequest):
         file_buffer.seek(0)
         class_data = json.loads(file_buffer.read().decode('utf-8'))
         
+        # CRITICAL FIX: Ensure students key exists
+        class_data = ensure_students_key(class_data)
+        print(f"[DEBUG] Class data keys: {list(class_data.keys())}")
+        
         # Get student
         if request.student_id not in class_data["students"]:
-            raise HTTPException(status_code=404, detail="Student not found")
+            print(f"[DEBUG] Available students: {list(class_data['students'].keys())}")
+            raise HTTPException(status_code=404, detail=f"Student '{request.student_id}' not found in class")
         
         student = class_data["students"][request.student_id]
         
@@ -1147,7 +1157,7 @@ async def collect_student_fee(request: CollectFeeRequest):
         current_paid = student.get("feespaid", 0)
         student["feespaid"] = current_paid + request.amount
         
-        # Calculate remaining (total - concession - paid)
+        # Calculate remaining
         total_fees = student.get("totalfees", 0)
         concession = student.get("concession", 0)
         fees_paid = student["feespaid"]
@@ -1266,9 +1276,14 @@ async def update_student_concession(request: UpdateConcessionRequest):
         file_buffer.seek(0)
         class_data = json.loads(file_buffer.read().decode('utf-8'))
         
+        # CRITICAL FIX: Ensure students key exists
+        class_data = ensure_students_key(class_data)
+        print(f"[DEBUG] Class data keys: {list(class_data.keys())}")
+        
         # Get student
         if request.student_id not in class_data["students"]:
-            raise HTTPException(status_code=404, detail="Student not found")
+            print(f"[DEBUG] Available students: {list(class_data['students'].keys())}")
+            raise HTTPException(status_code=404, detail=f"Student '{request.student_id}' not found")
         
         student = class_data["students"][request.student_id]
         
