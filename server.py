@@ -689,19 +689,26 @@ if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=port)
 
 
-# ========== COMPLETE STUDENT FEE MANAGEMENT SYSTEM ==========
-# REPLACE the code you pasted earlier with this complete version
-# This includes: Add Student, Collect Fee with PDF, Update Concession, Invoice Records
+# ========== COMPLETE STUDENT FEE MANAGEMENT SYSTEM (FINAL FIXED) ==========
+# REPLACE your current fee management code with this version
+# Fixes: Fee saving, PDF generation, Invoice records
 
 from datetime import datetime, timedelta
-from reportlab.lib.pagesizes import A4
-from reportlab.lib import colors
-from reportlab.lib.units import inch
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.enums import TA_CENTER, TA_RIGHT
 import os
 import glob
+
+# Only import ReportLab if available (for PDF generation)
+try:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.lib.units import inch
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.enums import TA_CENTER, TA_RIGHT
+    REPORTLAB_AVAILABLE = True
+except ImportError:
+    REPORTLAB_AVAILABLE = False
+    print("[WARNING] ReportLab not installed - PDF generation will be disabled")
 
 # ========== HELPER FUNCTIONS ==========
 
@@ -728,8 +735,11 @@ def get_class_total_fees(class_name):
             file_buffer.seek(0)
             fees_data = json.loads(file_buffer.read().decode('utf-8'))
             class_fees = fees_data.get("class_fees", {}).get(normalized_name, {})
-            return class_fees.get("total_fees", 0)
-        except:
+            total = class_fees.get("total_fees", 0)
+            print(f"[DEBUG] Class {normalized_name} total fees: {total}")
+            return total
+        except Exception as e:
+            print(f"[DEBUG] Could not get fees from fees.json: {str(e)}")
             return 0
     except Exception as e:
         print(f"[ERROR] get_class_total_fees: {str(e)}")
@@ -754,8 +764,11 @@ def get_next_invoice_number():
             ftp.retrbinary("RETR invoice_records.json", file_buffer.write)
             file_buffer.seek(0)
             invoice_data = json.loads(file_buffer.read().decode('utf-8'))
-            return invoice_data.get("next_invoice_number", 1)
-        except:
+            next_num = invoice_data.get("next_invoice_number", 1)
+            print(f"[DEBUG] Next invoice number: {next_num}")
+            return next_num
+        except Exception as e:
+            print(f"[DEBUG] No existing invoice records, starting from 1: {str(e)}")
             return 1
     except Exception as e:
         print(f"[ERROR] get_next_invoice_number: {str(e)}")
@@ -777,25 +790,31 @@ def save_invoice_record(invoice):
         from io import BytesIO
         invoice_data = {"invoices": [], "next_invoice_number": 1}
         
+        # Try to download existing records
         try:
             file_buffer = BytesIO()
             ftp.retrbinary("RETR invoice_records.json", file_buffer.write)
             file_buffer.seek(0)
             invoice_data = json.loads(file_buffer.read().decode('utf-8'))
-        except:
-            print(f"[DEBUG] Creating new invoice_records.json")
+            print(f"[DEBUG] Loaded existing invoice records")
+        except Exception as e:
+            print(f"[DEBUG] Creating new invoice_records.json: {str(e)}")
         
+        # Add new invoice
         invoice_data["invoices"].append(invoice)
         invoice_data["next_invoice_number"] = invoice_data.get("next_invoice_number", 1) + 1
         
+        # Upload updated records
         json_content = json.dumps(invoice_data, indent=2)
         file_buffer = BytesIO(json_content.encode('utf-8'))
         ftp.storbinary("STOR invoice_records.json", file_buffer)
         
-        print(f"[DEBUG] Invoice saved: {invoice['invoice_number']}")
+        print(f"[DEBUG] Invoice saved successfully: {invoice['invoice_number']}")
         return invoice_data["next_invoice_number"] - 1
     except Exception as e:
         print(f"[ERROR] save_invoice_record: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise
     finally:
         if ftp:
@@ -806,6 +825,11 @@ def save_invoice_record(invoice):
 
 def generate_receipt_pdf(invoice_number, student_data, amount_paid, note, created_by):
     """Generate PDF receipt (half A4 size)"""
+    
+    if not REPORTLAB_AVAILABLE:
+        print("[ERROR] ReportLab not available - cannot generate PDF")
+        raise Exception("PDF generation not available - ReportLab not installed")
+    
     try:
         temp_dir = "/tmp/receipts"
         os.makedirs(temp_dir, exist_ok=True)
@@ -813,6 +837,7 @@ def generate_receipt_pdf(invoice_number, student_data, amount_paid, note, create
         pdf_filename = f"{temp_dir}/INV-{invoice_number:05d}.pdf"
         print(f"[DEBUG] Creating PDF: {pdf_filename}")
         
+        # Create PDF document
         doc = SimpleDocTemplate(
             pdf_filename,
             pagesize=(A4[0], A4[1]/2),
@@ -825,6 +850,7 @@ def generate_receipt_pdf(invoice_number, student_data, amount_paid, note, create
         elements = []
         styles = getSampleStyleSheet()
         
+        # Title style
         title_style = ParagraphStyle(
             'CustomTitle',
             parent=styles['Heading1'],
@@ -834,6 +860,7 @@ def generate_receipt_pdf(invoice_number, student_data, amount_paid, note, create
             spaceAfter=12,
         )
         
+        # Header style
         header_style = ParagraphStyle(
             'Header',
             parent=styles['Normal'],
@@ -855,12 +882,12 @@ def generate_receipt_pdf(invoice_number, student_data, amount_paid, note, create
         elements.append(invoice_header)
         elements.append(Spacer(1, 0.2*inch))
         
-        # Student details
+        # Student details table
         student_details = [
-            ['Student Name:', student_data.get('name', 'N/A')],
-            ['Class:', student_data.get('class', 'N/A').upper()],
-            ['Father Name:', student_data.get('father', 'N/A')],
-            ['Phone:', student_data.get('phone', 'N/A')],
+            ['Student Name:', str(student_data.get('name', 'N/A'))],
+            ['Class:', str(student_data.get('class', 'N/A')).upper()],
+            ['Father Name:', str(student_data.get('father', 'N/A'))],
+            ['Phone:', str(student_data.get('phone', 'N/A'))],
         ]
         
         student_table = Table(student_details, colWidths=[1.5*inch, 3.5*inch])
@@ -873,7 +900,7 @@ def generate_receipt_pdf(invoice_number, student_data, amount_paid, note, create
         elements.append(student_table)
         elements.append(Spacer(1, 0.2*inch))
         
-        # Fee items
+        # Fee items table
         fee_data = [
             ['Description', 'Amount'],
             ['School Fees', f"₹{amount_paid}"],
@@ -893,7 +920,7 @@ def generate_receipt_pdf(invoice_number, student_data, amount_paid, note, create
         elements.append(fee_table)
         elements.append(Spacer(1, 0.2*inch))
         
-        # Totals
+        # Totals table
         totals_data = [
             ['Total Fees:', f"₹{student_data.get('totalfees', 0)}"],
             ['Amount Paid:', f"₹{amount_paid}"],
@@ -911,22 +938,24 @@ def generate_receipt_pdf(invoice_number, student_data, amount_paid, note, create
         elements.append(totals_table)
         elements.append(Spacer(1, 0.3*inch))
         
-        # Note
-        if note:
+        # Note if provided
+        if note and note.strip():
             note_para = Paragraph(f"<b>Note:</b> {note}", styles['Normal'])
             elements.append(note_para)
             elements.append(Spacer(1, 0.2*inch))
         
-        # Signature
+        # Signature line
         signature = Paragraph("_____________________<br/>Admin Signature", styles['Normal'])
         elements.append(signature)
         
+        # Build PDF
         doc.build(elements)
-        print(f"[DEBUG] PDF created successfully")
+        
+        print(f"[DEBUG] PDF created successfully: {pdf_filename}")
         return pdf_filename
         
     except Exception as e:
-        print(f"[ERROR] generate_receipt_pdf: {str(e)}")
+        print(f"[ERROR] generate_receipt_pdf failed: {str(e)}")
         import traceback
         traceback.print_exc()
         raise
@@ -943,10 +972,13 @@ def cleanup_old_receipts():
         deleted_count = 0
         
         for pdf_file in pdf_files:
-            file_time = datetime.fromtimestamp(os.path.getmtime(pdf_file))
-            if file_time < cutoff_date:
-                os.remove(pdf_file)
-                deleted_count += 1
+            try:
+                file_time = datetime.fromtimestamp(os.path.getmtime(pdf_file))
+                if file_time < cutoff_date:
+                    os.remove(pdf_file)
+                    deleted_count += 1
+            except:
+                pass
         
         if deleted_count > 0:
             print(f"[CLEANUP] Deleted {deleted_count} old receipts")
@@ -996,9 +1028,8 @@ async def add_student(request: AddStudentRequest):
         print(f"[DEBUG] Adding student: {request.student_id} to class: {request.class_name}")
         normalized_class = normalize_class_name(request.class_name)
         
-        # Get total fees for this class
+        # Get total fees
         total_fees = get_class_total_fees(normalized_class)
-        print(f"[DEBUG] Total fees for class: {total_fees}")
         
         ftp = get_ftp_connection()
         ftp.cwd(BASE_PATH)
@@ -1011,10 +1042,12 @@ async def add_student(request: AddStudentRequest):
             file_buffer.seek(0)
             class_data = json.loads(file_buffer.read().decode('utf-8'))
             class_data = ensure_students_key(class_data)
-        except:
+            print(f"[DEBUG] Loaded existing class file")
+        except Exception as e:
+            print(f"[DEBUG] Creating new class file: {str(e)}")
             class_data = {"students": {}}
         
-        # Check if student already exists
+        # Check if student exists
         if request.student_id in class_data["students"]:
             return {
                 "status": "error",
@@ -1047,7 +1080,7 @@ async def add_student(request: AddStudentRequest):
         file_buffer = BytesIO(json_content.encode('utf-8'))
         ftp.storbinary(f"STOR {normalized_class}.json", file_buffer)
         
-        print(f"[DEBUG] Student added successfully")
+        print(f"[DEBUG] Student added and saved successfully")
         
         return {
             "status": "success",
@@ -1104,18 +1137,19 @@ async def update_student(request: UpdateStudentRequest):
         
         # Recalculate fees if needed
         student = class_data["students"][request.student_id]
-        if "totalfees" in request.updates or "feespaid" in request.updates or "concession" in request.updates:
+        if any(key in request.updates for key in ["totalfees", "feespaid", "concession"]):
             total_fees = student.get("totalfees", 0)
             fees_paid = student.get("feespaid", 0)
             concession = student.get("concession", 0)
             student["feesremaining"] = total_fees - concession - fees_paid
+            print(f"[DEBUG] Recalculated fees - remaining: {student['feesremaining']}")
         
         # Save to FTP
         json_content = json.dumps(class_data, indent=2)
         file_buffer = BytesIO(json_content.encode('utf-8'))
         ftp.storbinary(f"STOR {normalized_class}.json", file_buffer)
         
-        print(f"[DEBUG] Student updated successfully")
+        print(f"[DEBUG] Student updated and saved successfully")
         
         return {
             "status": "success",
@@ -1142,7 +1176,8 @@ async def collect_student_fee(request: CollectFeeRequest):
     """Collect fee - Save only OR Generate invoice + PDF"""
     ftp = None
     try:
-        print(f"[DEBUG] Collecting fee for: {request.student_id}, Amount: {request.amount}, Generate invoice: {request.generate_invoice}")
+        print(f"[DEBUG] === COLLECT FEE START ===")
+        print(f"[DEBUG] Student: {request.student_id}, Amount: {request.amount}, Generate invoice: {request.generate_invoice}")
         
         normalized_class = normalize_class_name(request.class_name)
         ftp = get_ftp_connection()
@@ -1156,7 +1191,11 @@ async def collect_student_fee(request: CollectFeeRequest):
         class_data = json.loads(file_buffer.read().decode('utf-8'))
         class_data = ensure_students_key(class_data)
         
+        print(f"[DEBUG] Class data loaded, students count: {len(class_data['students'])}")
+        
         if request.student_id not in class_data["students"]:
+            print(f"[ERROR] Student not found: {request.student_id}")
+            print(f"[DEBUG] Available students: {list(class_data['students'].keys())[:5]}")
             return {
                 "status": "error",
                 "message": f"Student '{request.student_id}' not found"
@@ -1164,24 +1203,29 @@ async def collect_student_fee(request: CollectFeeRequest):
         
         student = class_data["students"][request.student_id]
         
+        print(f"[DEBUG] Before update - feespaid: {student.get('feespaid', 0)}, remaining: {student.get('feesremaining', 0)}")
+        
         # Update fees
-        current_paid = student.get("feespaid", 0)
+        current_paid = int(student.get("feespaid", 0))
         student["feespaid"] = current_paid + request.amount
         
         # Recalculate remaining
-        total_fees = student.get("totalfees", 0)
-        concession = student.get("concession", 0)
+        total_fees = int(student.get("totalfees", 0))
+        concession = int(student.get("concession", 0))
         student["feesremaining"] = total_fees - concession - student["feespaid"]
         
-        # Save to FTP
+        print(f"[DEBUG] After update - feespaid: {student['feespaid']}, remaining: {student['feesremaining']}")
+        
+        # CRITICAL: Save to FTP IMMEDIATELY
         json_content = json.dumps(class_data, indent=2)
         file_buffer = BytesIO(json_content.encode('utf-8'))
         ftp.storbinary(f"STOR {normalized_class}.json", file_buffer)
         
-        print(f"[DEBUG] Fee saved - paid: {student['feespaid']}, remaining: {student['feesremaining']}")
+        print(f"[DEBUG] ✅ FEE DATA SAVED TO FTP")
         
         # If NOT generating invoice, return here
         if not request.generate_invoice:
+            print(f"[DEBUG] Save only - no invoice generated")
             return {
                 "status": "success",
                 "message": "Fee updated successfully",
@@ -1191,63 +1235,83 @@ async def collect_student_fee(request: CollectFeeRequest):
         
         # GENERATE INVOICE + PDF
         print(f"[DEBUG] Generating invoice...")
-        invoice_number = get_next_invoice_number()
         
-        # Prepare student data for PDF
-        student_data = {
-            "name": request.student_id,
-            "class": normalized_class,
-            "father": student.get("father", "N/A"),
-            "phone": student.get("phone", "N/A"),
-            "totalfees": total_fees,
-            "feesremaining": student["feesremaining"]
-        }
-        
-        # Generate PDF
-        pdf_path = generate_receipt_pdf(
-            invoice_number,
-            student_data,
-            request.amount,
-            request.note,
-            request.created_by
-        )
-        
-        # Create invoice record
-        invoice = {
-            "invoice_number": f"INV-{invoice_number:05d}",
-            "student_name": request.student_id,
-            "class": normalized_class,
-            "amount_paid": request.amount,
-            "date": datetime.now().strftime("%Y-%m-%d"),
-            "created_by": request.created_by,
-            "note": request.note,
-            "items": [
-                {
-                    "description": "School Fees",
-                    "amount": request.amount
-                }
-            ]
-        }
-        
-        # Save invoice record
-        save_invoice_record(invoice)
-        
-        # Cleanup old PDFs
-        cleanup_old_receipts()
-        
-        pdf_url = f"file://{pdf_path}"
-        
-        print(f"[DEBUG] Invoice generated: INV-{invoice_number:05d}")
-        
-        return {
-            "status": "success",
-            "message": "Invoice generated successfully",
-            "invoice_number": f"INV-{invoice_number:05d}",
-            "pdf_url": pdf_url,
-            "pdf_path": pdf_path,
-            "fees_paid": student["feespaid"],
-            "fees_remaining": student["feesremaining"]
-        }
+        try:
+            invoice_number = get_next_invoice_number()
+            print(f"[DEBUG] Invoice number: {invoice_number}")
+            
+            # Prepare student data for PDF
+            student_data = {
+                "name": request.student_id,
+                "class": normalized_class,
+                "father": student.get("father", "N/A"),
+                "phone": student.get("phone", "N/A"),
+                "totalfees": total_fees,
+                "feesremaining": student["feesremaining"]
+            }
+            
+            # Generate PDF
+            print(f"[DEBUG] Generating PDF...")
+            pdf_path = generate_receipt_pdf(
+                invoice_number,
+                student_data,
+                request.amount,
+                request.note,
+                request.created_by
+            )
+            print(f"[DEBUG] PDF generated: {pdf_path}")
+            
+            # Create invoice record
+            invoice = {
+                "invoice_number": f"INV-{invoice_number:05d}",
+                "student_name": request.student_id,
+                "class": normalized_class,
+                "amount_paid": request.amount,
+                "date": datetime.now().strftime("%Y-%m-%d"),
+                "created_by": request.created_by,
+                "note": request.note,
+                "items": [
+                    {
+                        "description": "School Fees",
+                        "amount": request.amount
+                    }
+                ]
+            }
+            
+            # Save invoice record
+            print(f"[DEBUG] Saving invoice record...")
+            save_invoice_record(invoice)
+            print(f"[DEBUG] Invoice record saved")
+            
+            # Cleanup old PDFs
+            cleanup_old_receipts()
+            
+            pdf_url = f"file://{pdf_path}"
+            
+            print(f"[DEBUG] ✅ Invoice generated successfully: INV-{invoice_number:05d}")
+            
+            return {
+                "status": "success",
+                "message": "Invoice generated successfully",
+                "invoice_number": f"INV-{invoice_number:05d}",
+                "pdf_url": pdf_url,
+                "pdf_path": pdf_path,
+                "fees_paid": student["feespaid"],
+                "fees_remaining": student["feesremaining"]
+            }
+            
+        except Exception as pdf_error:
+            print(f"[ERROR] PDF/Invoice generation failed: {str(pdf_error)}")
+            import traceback
+            traceback.print_exc()
+            
+            # Return success for fee collection even if PDF fails
+            return {
+                "status": "partial_success",
+                "message": f"Fee updated but invoice generation failed: {str(pdf_error)}",
+                "fees_paid": student["feespaid"],
+                "fees_remaining": student["feesremaining"]
+            }
         
     except Exception as e:
         print(f"[ERROR] collect_student_fee: {str(e)}")
@@ -1269,7 +1333,8 @@ async def update_student_concession(request: UpdateConcessionRequest):
     """Update student concession"""
     ftp = None
     try:
-        print(f"[DEBUG] Updating concession for: {request.student_id}, Amount: {request.concession}")
+        print(f"[DEBUG] === UPDATE CONCESSION START ===")
+        print(f"[DEBUG] Student: {request.student_id}, Concession: {request.concession}")
         
         normalized_class = normalize_class_name(request.class_name)
         ftp = get_ftp_connection()
@@ -1290,20 +1355,24 @@ async def update_student_concession(request: UpdateConcessionRequest):
         
         student = class_data["students"][request.student_id]
         
+        print(f"[DEBUG] Before - concession: {student.get('concession', 0)}, remaining: {student.get('feesremaining', 0)}")
+        
         # Update concession
         student["concession"] = request.concession
         
         # Recalculate remaining
-        total_fees = student.get("totalfees", 0)
-        fees_paid = student.get("feespaid", 0)
+        total_fees = int(student.get("totalfees", 0))
+        fees_paid = int(student.get("feespaid", 0))
         student["feesremaining"] = total_fees - request.concession - fees_paid
+        
+        print(f"[DEBUG] After - concession: {student['concession']}, remaining: {student['feesremaining']}")
         
         # Save to FTP
         json_content = json.dumps(class_data, indent=2)
         file_buffer = BytesIO(json_content.encode('utf-8'))
         ftp.storbinary(f"STOR {normalized_class}.json", file_buffer)
         
-        print(f"[DEBUG] Concession updated - concession: {student['concession']}, remaining: {student['feesremaining']}")
+        print(f"[DEBUG] ✅ CONCESSION SAVED TO FTP")
         
         return {
             "status": "success",
@@ -1342,12 +1411,16 @@ async def get_invoice_records():
             file_buffer.seek(0)
             invoice_data = json.loads(file_buffer.read().decode('utf-8'))
             
+            invoices = invoice_data.get("invoices", [])
+            print(f"[DEBUG] Retrieved {len(invoices)} invoices")
+            
             return {
                 "status": "success",
-                "invoices": invoice_data.get("invoices", []),
-                "total": len(invoice_data.get("invoices", []))
+                "invoices": invoices,
+                "total": len(invoices)
             }
-        except:
+        except Exception as e:
+            print(f"[DEBUG] No invoice records found: {str(e)}")
             return {
                 "status": "success",
                 "invoices": [],
