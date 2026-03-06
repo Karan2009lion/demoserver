@@ -689,16 +689,16 @@ if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=port)
 
 
-# ========== COMPLETE STUDENT FEE MANAGEMENT SYSTEM (FINAL) ==========
-# Features: FTP PDF storage, auto-cleanup, reprint functionality
-# REPLACE your current fee management code with this
+# ========== COMPLETE STUDENT FEE MANAGEMENT SYSTEM ==========
+# PASTE THIS ENTIRE CODE AT THE END OF YOUR server.py FILE
+# Delete any existing fee management code first
 
 from datetime import datetime, timedelta
 import os
 import glob
 import tempfile
 
-# Import ReportLab
+# Import ReportLab for PDF generation
 try:
     from reportlab.lib.pagesizes import A4
     from reportlab.lib import colors
@@ -709,12 +709,12 @@ try:
     REPORTLAB_AVAILABLE = True
 except ImportError:
     REPORTLAB_AVAILABLE = False
-    print("[WARNING] ReportLab not installed")
+    print("[WARNING] ReportLab not installed - PDF generation will not work")
 
 # ========== HELPER FUNCTIONS ==========
 
 def normalize_student_data(class_data):
-    """Handle both JSON formats"""
+    """Handle both JSON formats: direct and wrapped"""
     if not isinstance(class_data, dict):
         return {"students": {}}
     
@@ -725,7 +725,7 @@ def normalize_student_data(class_data):
     return {"students": students, "_direct_format": True}
 
 def prepare_for_save(class_data):
-    """Convert back to original format"""
+    """Convert back to original format for saving"""
     if class_data.get("_direct_format") == True:
         return class_data.get("students", {})
     return class_data
@@ -815,7 +815,7 @@ def generate_and_upload_pdf(invoice_number, student_data, amount_paid, note, cre
     """Generate PDF and upload to FTP"""
     
     if not REPORTLAB_AVAILABLE:
-        raise Exception("PDF generation not available")
+        raise Exception("PDF generation not available - ReportLab not installed")
     
     ftp = None
     try:
@@ -962,8 +962,7 @@ def generate_and_upload_pdf(invoice_number, student_data, amount_paid, note, cre
         except:
             pass
         
-        # Return FTP path
-        return f"pdf/{pdf_filename}"
+        return pdf_filename
         
     except Exception as e:
         print(f"[ERROR] PDF generation/upload: {str(e)}")
@@ -978,10 +977,7 @@ def generate_and_upload_pdf(invoice_number, student_data, amount_paid, note, cre
                 pass
 
 def cleanup_old_pdfs():
-    """
-    Delete PDFs older than 1 day OR keep only last 5 PDFs
-    Runs after every invoice generation
-    """
+    """Delete PDFs older than 1 day OR keep only last 5"""
     ftp = None
     try:
         ftp = get_ftp_connection()
@@ -990,15 +986,12 @@ def cleanup_old_pdfs():
         try:
             ftp.cwd("pdf")
         except:
-            print(f"[DEBUG] No pdf directory to cleanup")
             return
         
-        # Get list of PDF files with timestamps
         files = []
         try:
             ftp.retrlines('MLSD', lambda x: files.append(x))
         except:
-            # Fallback to NLST if MLSD not supported
             filenames = []
             ftp.retrlines('NLST', filenames.append)
             files = [f"name={f}" for f in filenames if f.endswith('.pdf')]
@@ -1007,16 +1000,12 @@ def cleanup_old_pdfs():
         for file_info in files:
             parts = dict(item.split('=', 1) for item in file_info.split('; ') if '=' in item)
             if 'name' in parts and parts['name'].endswith('.pdf'):
-                # Get modification time
                 modify_time = parts.get('modify', '')
-                pdf_files.append({
-                    'name': parts['name'],
-                    'modify': modify_time
-                })
+                pdf_files.append({'name': parts['name'], 'modify': modify_time})
         
         print(f"[DEBUG] Found {len(pdf_files)} PDFs on FTP")
         
-        # Strategy 1: Delete PDFs older than 1 day
+        # Delete PDFs older than 1 day
         cutoff_date = (datetime.now() - timedelta(days=1)).strftime('%Y%m%d')
         deleted_old = 0
         
@@ -1026,26 +1015,21 @@ def cleanup_old_pdfs():
                     ftp.delete(pdf['name'])
                     pdf_files.remove(pdf)
                     deleted_old += 1
-                    print(f"[CLEANUP] Deleted old PDF: {pdf['name']}")
                 except:
                     pass
         
-        # Strategy 2: Keep only last 5 PDFs
+        # Keep only last 5 PDFs
         if len(pdf_files) > 5:
-            # Sort by modification time
             pdf_files.sort(key=lambda x: x['modify'] or '')
-            
-            # Delete oldest ones
             to_delete = len(pdf_files) - 5
             for i in range(to_delete):
                 try:
                     ftp.delete(pdf_files[i]['name'])
-                    print(f"[CLEANUP] Deleted excess PDF: {pdf_files[i]['name']}")
                 except:
                     pass
         
         if deleted_old > 0:
-            print(f"[CLEANUP] Deleted {deleted_old} old PDFs (>1 day)")
+            print(f"[CLEANUP] Deleted {deleted_old} old PDFs")
         
     except Exception as e:
         print(f"[ERROR] Cleanup failed: {str(e)}")
@@ -1140,7 +1124,7 @@ async def add_student(request: AddStudentRequest):
         normalized_data = normalize_student_data(class_data)
         
         if request.student_id in normalized_data["students"]:
-            return {"status": "error", "message": f"Student already exists"}
+            return {"status": "error", "message": "Student already exists"}
         
         normalized_data["students"][request.student_id] = {
             "father": request.father,
@@ -1226,7 +1210,7 @@ async def update_student(request: UpdateStudentRequest):
 
 @app.post("/students/collect-fee")
 async def collect_student_fee(request: CollectFeeRequest):
-    """Collect fee - Save OR Generate invoice + PDF"""
+    """Collect fee"""
     ftp = None
     try:
         print(f"[DEBUG] Collect fee: {request.student_id}, Amount: {request.amount}")
@@ -1283,8 +1267,7 @@ async def collect_student_fee(request: CollectFeeRequest):
                 "feesremaining": student["feesremaining"]
             }
             
-            # Generate and upload PDF to FTP
-            pdf_path = generate_and_upload_pdf(
+            pdf_filename = generate_and_upload_pdf(
                 invoice_number,
                 student_data,
                 request.amount,
@@ -1300,7 +1283,7 @@ async def collect_student_fee(request: CollectFeeRequest):
                 "date": datetime.now().strftime("%Y-%m-%d"),
                 "created_by": request.created_by,
                 "note": request.note,
-                "pdf_filename": pdf_path.split('/')[-1],  # Just filename
+                "pdf_filename": pdf_filename,
                 "items": [{"description": "School Fees", "amount": request.amount}]
             }
             
@@ -1313,7 +1296,7 @@ async def collect_student_fee(request: CollectFeeRequest):
                 "status": "success",
                 "message": "Invoice generated successfully",
                 "invoice_number": f"INV-{invoice_number:05d}",
-                "pdf_filename": invoice['pdf_filename'],
+                "pdf_filename": pdf_filename,
                 "fees_paid": student["feespaid"],
                 "fees_remaining": student["feesremaining"]
             }
@@ -1416,32 +1399,30 @@ async def get_invoice_records():
             except:
                 pass
 
-@app.get("/invoices/download/{pdf_filename}")
-async def download_invoice_pdf(pdf_filename: str):
-    """Download/reprint PDF from FTP"""
+@app.get("/invoices/view/{pdf_filename}")
+async def view_invoice_pdf(pdf_filename: str):
+    """View PDF in browser (inline, not download)"""
     try:
-        print(f"[DEBUG] Downloading PDF: {pdf_filename}")
+        print(f"[DEBUG] Viewing PDF: {pdf_filename}")
         
-        # Get PDF from FTP
         pdf_bytes = get_pdf_from_ftp(pdf_filename)
         
-        # Return as downloadable file
         from fastapi.responses import Response
         
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",
             headers={
-                "Content-Disposition": f"attachment; filename={pdf_filename}",
+                "Content-Disposition": f"inline; filename={pdf_filename}",
                 "Content-Type": "application/pdf"
             }
         )
         
     except Exception as e:
-        print(f"[ERROR] PDF download: {str(e)}")
+        print(f"[ERROR] PDF view: {str(e)}")
         return {
             "status": "error",
-            "message": f"Failed to download PDF: {str(e)}"
+            "message": f"Failed to view PDF: {str(e)}"
         }
 
-# ========== END OF COMPLETE SYSTEM ==========
+# ========== END OF STUDENT FEE MANAGEMENT SYSTEM ==========
